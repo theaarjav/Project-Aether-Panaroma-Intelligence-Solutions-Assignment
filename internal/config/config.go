@@ -45,7 +45,7 @@ type TelemetryConfig struct {
 func LoadGatewayConfig() *GatewayConfig {
 	return &GatewayConfig{
 		Port:         getEnvOrDefault("GATEWAY_PORT", "8080"),
-		KafkaBrokers: getEnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
+		KafkaBrokers: getEnvOrDefault("KAFKA_URL", "localhost:9092"),
 		RedisURL:     getEnvOrDefault("REDIS_URL", "redis://localhost:6379"),
 		DBURL:        getEnvOrDefault("DB_URL", "postgres://aether:aether123@localhost:5432/aether?sslmode=disable"),
 		MongoURL:     getEnvOrDefault("MONGO_URL", "mongodb://localhost:27017/aether"),

@@ -12,33 +12,37 @@
           ▼                      ▼                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    API Gateway (Proxy Service)                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Rate Limiter│  │   Router    │  │    Auth Middleware      │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-└─────────┬───────────────────────────────────────────┬───────────┘ 
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│  │ Rate Limiter│  │   Router    │  │    Auth Middleware      │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+└─────────┬───────────────────────────────────────────┬─────────┘
           │                                           │
-          │ Telemetry Events                          │ Cache Checks
+          │ Publishes to Kafka Topic                 │ Anomaly Checks
           ▼                                           ▼
 ┌─────────────────┐                         ┌─────────────────┐
-│   NATS Server   │                         │   Redis Cache   │
-│  (Message Queue)│                         │  (Anomaly Flags)│
-└─────────┬───────┘                         └─────────────────┘
-          │                                           ▲
-          │ Event Stream                              │
-          ▼                                           │
-┌─────────────────┐                                   │
-│ Analysis Service│───────────────────────────────────┘
-│ - Pattern Analysis                            Updates
-│ - Anomaly Detection
-│ - Baseline Calculation
-└─────────┬───────┘
+│   Kafka Cluster │                         │   Redis Cache   │
+│ Topic: api-calls│                         │ (Anomaly Flags │
+│ - Partitioned   │                         │ & Baselines)   │
+│ - Replicated    │                         └─────────────────┘
+│ - Persistent    │                                   ▲
+└─────────┬───────┘                                   │
+          │                                           │
+          │ Multiple Consumers                        │
+          ├─────────────────┬─────────────────────────┘
+          ▼                 ▼
+┌─────────────────┐ ┌───────────────────────┐
+│ Analysis Service│ │Telemetry Service      │
+│ - Anomaly Detect│ │ - MongoDB Store(TSDB) │
+│ - Pattern Recog │ │ - Metrics Calc        │
+│ - Baseline Calc │ │ - Log Archival        │
+└─────────┬───────┘ └───────────────────────┘
           │
-          │ Config Queries
-          ▼
-┌─────────────────┐    ┌─────────────────┐
-│  PostgreSQL DB  │    │ Upstream APIs   │
-│ (Config Storage)│    │ (Mock Services) │
-└─────────────────┘    └─────────────────┘
+          │ Config Queries                ┌─────────────────┐
+          ▼                               │   MongoDB TSDB  │
+┌─────────────────┐    ┌─────────────────┐│ (Request Logs)  │
+│  PostgreSQL DB  │    │ Upstream APIs   ││ - Time Series   │
+│(Client Configs) │    │ (Mock Services) ││ - Aggregations  │
+└─────────────────┘    └─────────────────┘└─────────────────┘
 ```
 
 ## System Components
@@ -65,7 +69,7 @@
 - **Baseline Calculation**: Rolling window statistics
 
 ### 4. Infrastructure Components
-- **Message Queue**: NATS for lightweight, high-performance messaging
+- **Message Queue**: Kafka for lightweight, high-performance messaging
 - **Cache**: Redis for fast anomaly flag storage with TTL
 - **Mock Upstream**: Simple HTTP services for testing
 
@@ -80,23 +84,31 @@
 - Fast JSON serialization
 - Excellent for building high-performance proxies
 
-**PostgreSQL**:
+**PostgreSQL** (Client Configuration):
 - ACID compliance for configuration data integrity
-- JSON column support for flexible configuration schemas
+- Complex queries for client management
 - Excellent concurrent read performance
-- Well-suited for configuration management
+- Perfect for structured configuration data
 
-**NATS**:
-- Lightweight and fast messaging (sub-microsecond latency)
-- Simple pub-sub model perfect for telemetry
-- Lower resource usage compared to Kafka for this use case
-- Built-in clustering and fault tolerance
-
-**Redis**:
-- Sub-millisecond latency for cache operations
-- Built-in TTL support perfect for temporary anomaly flags
+**Redis** (Anomaly Data & Caching):
+- Sub-millisecond latency for anomaly flag operations
+- Built-in TTL support for temporary anomaly status
 - Atomic operations for race condition prevention
-- High availability with clustering
+- Perfect for ephemeral anomaly data and baseline caching
+
+**MongoDB** (Request Logs & Time Series):
+- Optimized for high-volume writes
+- Excellent time-series data handling
+- Flexible schema for request metadata
+- Built-in TTL for automatic log cleanup
+- Superior performance for log aggregation queries
+
+**Kafka** (Event Streaming):
+- High-throughput, persistent event streaming
+- Multiple consumers can process same events independently
+- Built-in partitioning for horizontal scaling
+- Event replay capability for historical analysis
+- Perfect for audit logs and real-time analytics
 
 ### Architectural Patterns
 
@@ -257,26 +269,28 @@ cd project-aether
 docker-compose up -d
 
 # Verify services are running
-curl http://localhost:8080/health
+curl {{GATEWAY_URL}}/health
 
 # View logs
 docker-compose logs -f
 ```
 
 ### Service Endpoints
-- **API Gateway**: http://localhost:8080
-- **Configuration API**: http://localhost:8081
-- **Analysis Service**: Internal (no direct access)
-- **PostgreSQL**: localhost:5432
-- **Redis**: localhost:6379
-- **NATS**: localhost:4222
+- **API Gateway**: {GATEWAY_URL}
+- **Configuration API**: {CONFIG_URL}
+- **Analysis Service**: Internal (Kafka consumer)
+- **Telemetry Service**: Internal (Kafka consumer)
+- **PostgreSQL**: {POSTGRES_DB_CONN_URL}
+- **Redis**: {REDIS_URL}
+- **MongoDB**: {MONGO_DB_URL}
+- **Kafka**: {KAFKA_URL}
 
 ### Testing the System
 
 #### 1. Configure Rate Limits
 ```bash
 # Set rate limit for client-123
-curl -X POST http://localhost:8081/config/rate-limits \
+curl -X POST {{CONFIG_URL}}/config/rate-limits \
   -H "Content-Type: application/json" \
   -d '{
     "client_id": "client-123",
@@ -288,12 +302,12 @@ curl -X POST http://localhost:8081/config/rate-limits \
 ```bash
 # Normal request
 curl -H "X-Client-ID: client-123" \
-  http://localhost:8080/api/users
+  {{GATEWAY_URL}}/api/users
 
 # Generate high traffic to trigger anomaly
 for i in {1..200}; do
   curl -H "X-Client-ID: client-123" \
-    http://localhost:8080/api/users &
+    {{GATEWAY_URL}}/api/users &
 done
 ```
 
@@ -310,19 +324,36 @@ redis-cli GET anomaly:client-123
 # API Gateway
 GATEWAY_PORT=8080
 UPSTREAM_URLS=http://upstream1:3001,http://upstream2:3002
-NATS_URL=nats://nats:4222
+KAFKA_BROKERS=kafka:9092
 REDIS_URL=redis://redis:6379
 DB_URL=postgres://user:pass@postgres:5432/aether
+MONGO_URL=mongodb://mongo:27017/aether
 
 # Analysis Service
 ANALYSIS_WINDOW_MINUTES=60
 ANOMALY_THRESHOLD_SIGMA=3
 ANOMALY_TTL_MINUTES=5
+
+# Telemetry Service
+KAFKA_BROKERS=kafka:9092
+MONGO_URL=mongodb://mongo:27017/aether
 ```
 
 ### Database Schema
+
+**PostgreSQL (Client Configuration)**:
 ```sql
--- Client rate limit configurations
+-- Client information and authentication
+CREATE TABLE clients (
+    client_id VARCHAR(255) PRIMARY KEY,
+    client_name VARCHAR(500),
+    email VARCHAR(320),
+    tier VARCHAR(50) DEFAULT 'standard',
+    status VARCHAR(20) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Rate limiting rules
 CREATE TABLE rate_limits (
     client_id VARCHAR(255) PRIMARY KEY,
     requests_per_minute INTEGER NOT NULL,
@@ -330,15 +361,41 @@ CREATE TABLE rate_limits (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+```
 
--- Request baselines for anomaly detection
-CREATE TABLE client_baselines (
-    client_id VARCHAR(255) PRIMARY KEY,
-    avg_requests_per_minute DECIMAL(10,2),
-    std_deviation DECIMAL(10,2),
-    sample_count INTEGER,
-    last_updated TIMESTAMP DEFAULT NOW()
-);
+**Redis (Anomaly Data & Caching)**:
+```
+# Anomaly flags (TTL: 5-10 minutes)
+anomaly:{client_id} -> "true"
+
+# Rate limiting tokens (TTL: 5 minutes)
+rate_limit:standard:{client_id} -> {tokens: N, last_refill: timestamp}
+rate_limit:anomaly:{client_id} -> {tokens: N, last_refill: timestamp}
+
+# Cached baselines (TTL: 1 hour)
+baseline:{client_id} -> {avg: N, std_dev: N, sample_count: N}
+```
+
+**MongoDB (Request Logs & Time Series)**:
+```javascript
+// Request logs collection with time series optimization
+{
+  _id: ObjectId,
+  client_id: "client-123",
+  timestamp: ISODate,
+  path: "/api/users",
+  method: "GET",
+  status_code: 200,
+  response_latency_ms: 45,
+  is_throttled: false,
+  is_anomalous: false,
+  upstream_service: "upstream1",
+  // Time series fields for aggregation
+  hour: 14,
+  day: 31,
+  month: 8,
+  year: 2025
+}
 ```
 
 ## Monitoring & Observability
@@ -404,7 +461,7 @@ CREATE TABLE client_baselines (
 go install github.com/tsenart/vegeta@latest
 
 # Run load test
-echo "GET http://localhost:8080/api/users" | \
+echo "GET {{GATEWAY_URL}}/api/users" | \
   vegeta attack -header "X-Client-ID: client-123" \
   -rate=1000 -duration=30s | \
   vegeta report
