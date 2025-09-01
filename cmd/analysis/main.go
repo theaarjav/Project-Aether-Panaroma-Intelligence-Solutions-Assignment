@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	dbConfig "project-aether/cmd/config/db"
 	"project-aether/internal/analytics"
 	"project-aether/internal/config"
 	"project-aether/internal/messaging"
@@ -29,7 +30,7 @@ type AnalysisService struct {
 	kafka  *messaging.KafkaConsumer
 	redis  *redis.Client
 	db     *sql.DB
-	mongo  *mongo.Client
+	mongo  *mongo.Database
 	config *config.AnalysisConfig
 
 	// Analytics engine for complex calculations
@@ -362,27 +363,13 @@ func NewAnalysisService(cfg *config.AnalysisConfig) (*AnalysisService, error) {
 	}
 
 	// Connect to PostgreSQL (for client configurations)
-	db, err := sql.Open("postgres", cfg.DBURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("database ping failed: %w", err)
-	}
+	db := dbConfig.GetPostgresDB(cfg.DBURL, "./migrations")
 
 	// Connect to MongoDB
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURL))
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
-	}
-
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		return nil, fmt.Errorf("MongoDB ping failed: %w", err)
-	}
+	mongoDb := dbConfig.GetMongoDB(cfg.MongoURL, "aether")
 
 	// Get collections
-	requestLogs := mongoClient.Database("aether").Collection("request_logs")
+	requestLogs := mongoDb.Collection("request_logs")
 
 	// Initialize analytics engine
 	analyticsEngine := analytics.NewAnalyticsEngine(requestLogs)
@@ -395,7 +382,7 @@ func NewAnalysisService(cfg *config.AnalysisConfig) (*AnalysisService, error) {
 	service := &AnalysisService{
 		redis:           redisClient,
 		db:              db,
-		mongo:           mongoClient,
+		mongo:           mongoDb,
 		config:          cfg,
 		analyticsEngine: analyticsEngine,
 		requestLogs:     requestLogs,

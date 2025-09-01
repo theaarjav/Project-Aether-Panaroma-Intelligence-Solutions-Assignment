@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"project-aether/cmd/config/db"
 	"strconv"
 	"sync"
 	"time"
@@ -30,14 +31,7 @@ type ClientConfig struct {
 }
 
 func NewRateLimiter(redisClient *redis.Client, dbURL string) *RateLimiter {
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		log.Fatalf("Database ping failed: %v", err)
-	}
+	db := db.GetPostgresDB(dbURL, "./migrations")
 
 	rl := &RateLimiter{
 		redis:        redisClient,

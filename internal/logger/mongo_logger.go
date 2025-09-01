@@ -6,13 +6,15 @@ import (
 	"log"
 	"time"
 
+	dbConfig "project-aether/cmd/config/db"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MongoLogger struct {
-	client     *mongo.Client
+	mongoDB    *mongo.Database
 	collection *mongo.Collection
 }
 
@@ -53,20 +55,7 @@ type ClientMetrics struct {
 }
 
 func NewMongoLogger(mongoURL string) (*MongoLogger, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURL))
-	if err != nil {
-		return nil, err
-	}
-
-	// Test connection
-	if err := client.Ping(ctx, nil); err != nil {
-		return nil, err
-	}
-
-	db := client.Database("aether")
+	db := dbConfig.GetMongoDB(mongoURL, "aether")
 	collection := db.Collection("request_logs")
 
 	// Create indexes for better query performance
@@ -121,13 +110,13 @@ func NewMongoLogger(mongoURL string) (*MongoLogger, error) {
 	}()
 
 	return &MongoLogger{
-		client:     client,
+		mongoDB:    db,
 		collection: collection,
 	}, nil
 }
 
-func (ml *MongoLogger) GetClient() *mongo.Client {
-	return ml.client
+func (ml *MongoLogger) GetDB() *mongo.Database {
+	return ml.mongoDB
 }
 
 func (ml *MongoLogger) LogRequest(ctx context.Context, log RequestLog) error {
@@ -463,9 +452,9 @@ func calculatePercentile(values []int64, percentile int) float64 {
 	return float64(values[index])
 }
 func (ml *MongoLogger) Close() {
-	if ml.client != nil {
+	if ml.mongoDB != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		ml.client.Disconnect(ctx)
+		ml.mongoDB.Client().Disconnect(ctx)
 	}
 }

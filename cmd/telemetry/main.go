@@ -161,8 +161,7 @@ func (ts *TelemetryService) HandleAPICallEventBatch(ctx context.Context, events 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	mongoClient := ts.mongoLogger.GetClient()
-	collection := mongoClient.Database("aether").Collection("request_logs")
+	collection := ts.mongoLogger.GetDB().Collection("request_logs")
 
 	_, err := collection.InsertMany(ctx, mongoLogs)
 	if err != nil {
